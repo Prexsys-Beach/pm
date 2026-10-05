@@ -1,168 +1,149 @@
 export type Card = {
-  id: string;
+  id: number;
+  dndId: string;
   title: string;
   details: string;
+  position: number;
 };
 
 export type Column = {
-  id: string;
+  key: string;
   title: string;
+  position: number;
   cardIds: string[];
 };
 
 export type BoardData = {
+  boardId: number;
+  userId: number;
+  title: string;
   columns: Column[];
   cards: Record<string, Card>;
 };
 
-export const initialData: BoardData = {
-  columns: [
-    { id: "col-backlog", title: "Backlog", cardIds: ["card-1", "card-2"] },
-    { id: "col-discovery", title: "Discovery", cardIds: ["card-3"] },
-    {
-      id: "col-progress",
-      title: "In Progress",
-      cardIds: ["card-4", "card-5"],
-    },
-    { id: "col-review", title: "Review", cardIds: ["card-6"] },
-    { id: "col-done", title: "Done", cardIds: ["card-7", "card-8"] },
-  ],
-  cards: {
-    "card-1": {
-      id: "card-1",
-      title: "Align roadmap themes",
-      details: "Draft quarterly themes with impact statements and metrics.",
-    },
-    "card-2": {
-      id: "card-2",
-      title: "Gather customer signals",
-      details: "Review support tags, sales notes, and churn feedback.",
-    },
-    "card-3": {
-      id: "card-3",
-      title: "Prototype analytics view",
-      details: "Sketch initial dashboard layout and key drill-downs.",
-    },
-    "card-4": {
-      id: "card-4",
-      title: "Refine status language",
-      details: "Standardize column labels and tone across the board.",
-    },
-    "card-5": {
-      id: "card-5",
-      title: "Design card layout",
-      details: "Add hierarchy and spacing for scanning dense lists.",
-    },
-    "card-6": {
-      id: "card-6",
-      title: "QA micro-interactions",
-      details: "Verify hover, focus, and loading states.",
-    },
-    "card-7": {
-      id: "card-7",
-      title: "Ship marketing page",
-      details: "Final copy approved and asset pack delivered.",
-    },
-    "card-8": {
-      id: "card-8",
-      title: "Close onboarding sprint",
-      details: "Document release notes and share internally.",
-    },
-  },
+export type ApiCard = {
+  id: number;
+  title: string;
+  details: string;
+  position: number;
 };
 
-const isColumnId = (columns: Column[], id: string) =>
-  columns.some((column) => column.id === id);
-
-const findColumnId = (columns: Column[], id: string) => {
-  if (isColumnId(columns, id)) {
-    return id;
-  }
-  return columns.find((column) => column.cardIds.includes(id))?.id;
+export type ApiColumn = {
+  key: string;
+  title: string;
+  position: number;
+  cards: ApiCard[];
 };
 
-export const moveCard = (
-  columns: Column[],
-  activeId: string,
-  overId: string
-): Column[] => {
-  const activeColumnId = findColumnId(columns, activeId);
-  const overColumnId = findColumnId(columns, overId);
-
-  if (!activeColumnId || !overColumnId) {
-    return columns;
-  }
-
-  const activeColumn = columns.find((column) => column.id === activeColumnId);
-  const overColumn = columns.find((column) => column.id === overColumnId);
-
-  if (!activeColumn || !overColumn) {
-    return columns;
-  }
-
-  const isOverColumn = isColumnId(columns, overId);
-
-  if (activeColumnId === overColumnId) {
-    if (isOverColumn) {
-      const nextCardIds = activeColumn.cardIds.filter(
-        (cardId) => cardId !== activeId
-      );
-      nextCardIds.push(activeId);
-      return columns.map((column) =>
-        column.id === activeColumnId
-          ? { ...column, cardIds: nextCardIds }
-          : column
-      );
-    }
-
-    const oldIndex = activeColumn.cardIds.indexOf(activeId);
-    const newIndex = activeColumn.cardIds.indexOf(overId);
-
-    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
-      return columns;
-    }
-
-    const nextCardIds = [...activeColumn.cardIds];
-    nextCardIds.splice(oldIndex, 1);
-    nextCardIds.splice(newIndex, 0, activeId);
-
-    return columns.map((column) =>
-      column.id === activeColumnId
-        ? { ...column, cardIds: nextCardIds }
-        : column
-    );
-  }
-
-  const activeIndex = activeColumn.cardIds.indexOf(activeId);
-  if (activeIndex === -1) {
-    return columns;
-  }
-
-  const nextActiveCardIds = [...activeColumn.cardIds];
-  nextActiveCardIds.splice(activeIndex, 1);
-
-  const nextOverCardIds = [...overColumn.cardIds];
-  if (isOverColumn) {
-    nextOverCardIds.push(activeId);
-  } else {
-    const overIndex = overColumn.cardIds.indexOf(overId);
-    const insertIndex = overIndex === -1 ? nextOverCardIds.length : overIndex;
-    nextOverCardIds.splice(insertIndex, 0, activeId);
-  }
-
-  return columns.map((column) => {
-    if (column.id === activeColumnId) {
-      return { ...column, cardIds: nextActiveCardIds };
-    }
-    if (column.id === overColumnId) {
-      return { ...column, cardIds: nextOverCardIds };
-    }
-    return column;
-  });
+export type ApiBoard = {
+  boardId: number;
+  userId: number;
+  title: string;
+  columns: ApiColumn[];
 };
 
-export const createId = (prefix: string) => {
-  const randomPart = Math.random().toString(36).slice(2, 8);
-  const timePart = Date.now().toString(36);
-  return `${prefix}-${randomPart}${timePart}`;
+export const toDndCardId = (id: number) => `card-${id}`;
+
+export const toBoardData = (board: ApiBoard): BoardData => {
+  const cards: Record<string, Card> = {};
+  const columns = board.columns
+    .slice()
+    .sort((a, b) => a.position - b.position)
+    .map((column) => {
+      const orderedCards = column.cards.slice().sort((a, b) => a.position - b.position);
+      const cardIds = orderedCards.map((card) => {
+        const dndId = toDndCardId(card.id);
+        cards[dndId] = {
+          id: card.id,
+          dndId,
+          title: card.title,
+          details: card.details,
+          position: card.position,
+        };
+        return dndId;
+      });
+
+      return {
+        key: column.key,
+        title: column.title,
+        position: column.position,
+        cardIds,
+      };
+    });
+
+  return {
+    boardId: board.boardId,
+    userId: board.userId,
+    title: board.title,
+    columns,
+    cards,
+  };
+};
+
+export const parseCardIdFromDndId = (dndId: string): number | null => {
+  if (!dndId.startsWith("card-")) {
+    return null;
+  }
+  const numericPart = Number.parseInt(dndId.slice("card-".length), 10);
+  if (Number.isNaN(numericPart)) {
+    return null;
+  }
+  return numericPart;
+};
+
+export const findColumnKeyByDndId = (columns: Column[], dndId: string): string | null => {
+  if (columns.some((column) => column.key === dndId)) {
+    return dndId;
+  }
+  return columns.find((column) => column.cardIds.includes(dndId))?.key ?? null;
+};
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+export const deriveMoveTargetPosition = ({
+  columns,
+  sourceColumnKey,
+  targetColumnKey,
+  activeCardDndId,
+  overDndId,
+  dropAfterOverCard,
+}: {
+  columns: Column[];
+  sourceColumnKey: string;
+  targetColumnKey: string;
+  activeCardDndId: string;
+  overDndId: string;
+  dropAfterOverCard: boolean;
+}): number | null => {
+  if (overDndId === targetColumnKey) {
+    return null;
+  }
+
+  const targetColumn = columns.find((column) => column.key === targetColumnKey);
+  if (!targetColumn) {
+    return null;
+  }
+
+  const overIndex = targetColumn.cardIds.indexOf(overDndId);
+  if (overIndex < 0) {
+    return null;
+  }
+
+  if (sourceColumnKey !== targetColumnKey) {
+    const destinationCount = targetColumn.cardIds.length;
+    const insertIndex = clamp(overIndex + (dropAfterOverCard ? 1 : 0), 0, destinationCount);
+    return insertIndex + 1;
+  }
+
+  const sourceIndex = targetColumn.cardIds.indexOf(activeCardDndId);
+  if (sourceIndex < 0) {
+    return null;
+  }
+
+  let insertIndex = overIndex + (dropAfterOverCard ? 1 : 0);
+  if (insertIndex > sourceIndex) {
+    insertIndex -= 1;
+  }
+  insertIndex = clamp(insertIndex, 0, targetColumn.cardIds.length - 1);
+  return insertIndex + 1;
 };

@@ -1,0 +1,23 @@
+[project]
+name = "pm-backend"
+version = "0.1.0"
+description = "FastAPI backend for the PM MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.118.0,<1.0.0",
+  "httpx>=0.28.1,<1.0.0",
+  "itsdangerous>=2.2.0,<3.0.0",
+  "uvicorn[standard]>=0.37.0,<1.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2,<9.0.0",
+  "pytest-cov>=7.0.0,<8.0.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]
+pythonpath = ["."]
