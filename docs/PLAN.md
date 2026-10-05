@@ -9,6 +9,8 @@ This document is the execution checklist for the MVP. It is designed to be compl
 - [x] Sign-in persistence uses backend-managed HTTP-only session cookie.
 - [x] Board columns remain fixed-count and rename-only (no add/remove columns for MVP).
 - [x] Persist last 20 chat messages per user.
+- [x] AI proposal confirmation is enforced in the frontend by queuing proposed updates client-side and applying each update only when explicitly confirmed.
+- [x] Drag/drop e2e uses explicit mouse-coordinate dragging instead of `locator.dragTo(...)` for stable DnD-kit behavior in Docker browser runs.
 
 ## Quality rules used throughout
 
@@ -141,7 +143,7 @@ This document is the execution checklist for the MVP. It is designed to be compl
   - [x] chat messages (capped to last 20 per user)
 - [x] Define JSON representation for board payload exchange.
 - [x] Document schema and lifecycle in `docs/` (creation, initialization, migration posture).
-- [ ] Get user approval before implementing full persistence logic.
+- [x] Get user approval before implementing full persistence logic.
 
 ### Tests
 
@@ -265,23 +267,31 @@ This document is the execution checklist for the MVP. It is designed to be compl
 
 ### Implementation checklist
 
-- [ ] Add sidebar AI chat interface to frontend.
-- [ ] Show conversation thread and pending AI-proposed board changes.
-- [ ] Require explicit user confirm/reject for each AI-proposed update.
-- [ ] On confirm, apply update and refresh board state immediately.
+- [x] Add sidebar AI chat interface to frontend.
+- [x] Show conversation thread and pending AI-proposed board changes.
+- [x] Require explicit user confirm/reject for each AI-proposed update.
+- [x] On confirm, apply update and refresh board state immediately.
 
 ### Tests
 
-- [ ] Component tests for sidebar rendering and interaction.
-- [ ] Integration tests for submit -> AI response -> confirm/reject flow.
-- [ ] E2E tests for end-to-end board update through AI proposal confirmation.
-- [ ] Durability tests for repeated chat/mutation cycles and refresh behavior.
+- [x] Component tests for sidebar rendering and interaction.
+- [x] Integration tests for submit -> AI response -> confirm/reject flow.
+- [x] E2E tests for end-to-end board update through AI proposal confirmation.
+- [x] Durability tests for repeated chat/mutation cycles and refresh behavior.
 
 ### Success criteria
 
 - AI chat is usable and visually integrated.
 - No board change is applied without user confirmation.
 - Confirmed changes persist and become visible immediately.
+
+### Implementation notes (design decisions applied)
+
+- Sidebar chat receives backend response shape `{ assistantMessage, proposedUpdates, chatHistory }` and renders chat history directly from backend-provided history.
+- Proposed updates are stored as pending items in frontend state and are not auto-applied.
+- Confirm triggers the matching existing backend mutation endpoint (`/api/columns/*`, `/api/cards*`) and then refreshes board state from that response.
+- Reject removes only the selected pending update without mutating board state.
+- Tests for AI confirmation flow include repeated submit/confirm/reject cycles and refresh persistence.
 
 ---
 

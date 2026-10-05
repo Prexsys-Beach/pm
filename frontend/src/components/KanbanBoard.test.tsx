@@ -131,4 +131,65 @@ describe("KanbanBoard", () => {
       "Column title cannot be empty."
     );
   });
+
+  it("queues AI-proposed updates until user confirms", async () => {
+    const boardWithNewCard: ApiBoard = {
+      ...initialApiBoard,
+      columns: initialApiBoard.columns.map((column) =>
+        column.key === "col-discovery"
+          ? {
+              ...column,
+              cards: [
+                ...column.cards,
+                { id: 88, title: "AI card", details: "Created from chat", position: 1 },
+              ],
+            }
+          : column
+      ),
+    };
+
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation((input, init) => {
+      if (typeof input === "string" && input === "/api/ai/chat") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            assistantMessage: "I can add that card for you.",
+            proposedUpdates: [
+              {
+                action: "create_card",
+                columnKey: "col-discovery",
+                title: "AI card",
+                details: "Created from chat",
+              },
+            ],
+            chatHistory: [
+              { role: "user", content: "Add a card in discovery" },
+              { role: "assistant", content: "I can add that card for you." },
+            ],
+          }),
+        } as Response);
+      }
+      if (typeof input === "string" && input === "/api/cards" && init?.method === "POST") {
+        return buildResponse(boardWithNewCard);
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<KanbanBoard initialBoard={toBoardData(initialApiBoard)} />);
+
+    await userEvent.type(screen.getByLabelText("Prompt"), "Add a card in discovery");
+    await userEvent.click(screen.getByRole("button", { name: "Send to AI" }));
+
+    expect(await screen.findByText('Create card "AI card" in col-discovery')).toBeInTheDocument();
+    const targetColumn = screen.getByTestId("column-col-discovery");
+    expect(within(targetColumn).queryByText("AI card")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    expect(await within(targetColumn).findByText("AI card")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/cards",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
 });

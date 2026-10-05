@@ -17,6 +17,12 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import {
+  AiChatSidebar,
+  type ChatMessage,
+  type PendingUpdate,
+  type ProposedUpdate,
+} from "@/components/AiChatSidebar";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import {
@@ -30,6 +36,12 @@ const defaultError = "Unable to save that change right now. Please try again.";
 
 type KanbanBoardProps = {
   initialBoard: BoardData;
+};
+
+type AIChatResponse = {
+  assistantMessage: string;
+  proposedUpdates: ProposedUpdate[];
+  chatHistory: ChatMessage[];
 };
 
 const fallbackCollisionDetection: CollisionDetection = (args) => {
@@ -215,6 +227,11 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [pendingUpdates, setPendingUpdates] = useState<PendingUpdate[]>([]);
+  const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
+  const [applyingUpdateId, setApplyingUpdateId] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
   const lastKnownOverIdRef = useRef<string | null>(null);
 
   const sensors = useSensors(
@@ -247,15 +264,131 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
       }
       const payload = (await response.json()) as unknown;
       applyBoardResponse(payload);
+      return true;
     } catch (caughtError) {
       setError(
         caughtError instanceof Error && caughtError.message
           ? caughtError.message
           : defaultError
       );
+      return false;
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const applyProposedUpdate = async (instruction: ProposedUpdate) => {
+    if (instruction.action === "rename_column") {
+      return withPersistence(() =>
+        fetch(`/api/columns/${instruction.columnKey}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: instruction.title }),
+        })
+      );
+    }
+    if (instruction.action === "create_card") {
+      return withPersistence(() =>
+        fetch("/api/cards", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            columnKey: instruction.columnKey,
+            title: instruction.title,
+            details: instruction.details,
+          }),
+        })
+      );
+    }
+    if (instruction.action === "update_card") {
+      return withPersistence(() =>
+        fetch(`/api/cards/${instruction.cardId}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: instruction.title,
+            details: instruction.details,
+          }),
+        })
+      );
+    }
+    if (instruction.action === "delete_card") {
+      return withPersistence(() =>
+        fetch(`/api/cards/${instruction.cardId}`, {
+          method: "DELETE",
+          credentials: "include",
+        })
+      );
+    }
+
+    return withPersistence(() =>
+      fetch(`/api/cards/${instruction.cardId}/move`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetColumnKey: instruction.targetColumnKey,
+          targetPosition: instruction.targetPosition,
+        }),
+      })
+    );
+  };
+
+  const handleSubmitPrompt = async (prompt: string) => {
+    setChatError(null);
+    setIsSubmittingPrompt(true);
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as { detail?: string };
+        throw new Error(payload.detail ?? defaultError);
+      }
+      const payload = (await response.json()) as AIChatResponse;
+      setChatHistory(payload.chatHistory);
+      if (payload.proposedUpdates.length > 0) {
+        const responseTimestamp = Date.now();
+        setPendingUpdates((existing) => [
+          ...existing,
+          ...payload.proposedUpdates.map((instruction, index) => ({
+            id: `${responseTimestamp}-${index}`,
+            instruction,
+          })),
+        ]);
+      }
+    } catch (caughtError) {
+      setChatError(
+        caughtError instanceof Error && caughtError.message
+          ? caughtError.message
+          : defaultError
+      );
+    } finally {
+      setIsSubmittingPrompt(false);
+    }
+  };
+
+  const handleConfirmUpdate = async (pendingId: string) => {
+    const update = pendingUpdates.find((pending) => pending.id === pendingId);
+    if (!update) {
+      return;
+    }
+    setApplyingUpdateId(pendingId);
+    const wasApplied = await applyProposedUpdate(update.instruction);
+    if (wasApplied) {
+      setPendingUpdates((existing) => existing.filter((pending) => pending.id !== pendingId));
+    }
+    setApplyingUpdateId(null);
+  };
+
+  const handleRejectUpdate = (pendingId: string) => {
+    setPendingUpdates((existing) => existing.filter((pending) => pending.id !== pendingId));
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -471,41 +604,53 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
           {error ? <p role="alert" className="text-sm font-medium text-red-700">{error}</p> : null}
         </header>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={collisionDetectionStrategy}
-          onDragStart={handleDragStart}
-          onDragMove={handleDragMove}
-          onDragOver={handleDragOver}
-          onDragCancel={() => {
-            lastKnownOverIdRef.current = null;
-            setActiveCardId(null);
-          }}
-          onDragEnd={(event) => {
-            void handleDragEnd(event);
-          }}
-        >
-          <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column) => (
-              <KanbanColumn
-                key={column.key}
-                column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
-                onRename={handleRenameColumn}
-                onAddCard={handleAddCard}
-                onDeleteCard={handleDeleteCard}
-                onUpdateCard={handleUpdateCard}
-              />
-            ))}
-          </section>
-          <DragOverlay>
-            {activeCard ? (
-              <div className="w-[260px]">
-                <KanbanCardPreview card={activeCard} />
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={collisionDetectionStrategy}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragOver={handleDragOver}
+            onDragCancel={() => {
+              lastKnownOverIdRef.current = null;
+              setActiveCardId(null);
+            }}
+            onDragEnd={(event) => {
+              void handleDragEnd(event);
+            }}
+          >
+            <section className="grid gap-6 lg:grid-cols-5">
+              {board.columns.map((column) => (
+                <KanbanColumn
+                  key={column.key}
+                  column={column}
+                  cards={column.cardIds.map((cardId) => board.cards[cardId])}
+                  onRename={handleRenameColumn}
+                  onAddCard={handleAddCard}
+                  onDeleteCard={handleDeleteCard}
+                  onUpdateCard={handleUpdateCard}
+                />
+              ))}
+            </section>
+            <DragOverlay>
+              {activeCard ? (
+                <div className="w-[260px]">
+                  <KanbanCardPreview card={activeCard} />
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+          <AiChatSidebar
+            chatHistory={chatHistory}
+            pendingUpdates={pendingUpdates}
+            isSubmittingPrompt={isSubmittingPrompt}
+            applyingUpdateId={applyingUpdateId}
+            error={chatError}
+            onSubmitPrompt={handleSubmitPrompt}
+            onConfirmUpdate={handleConfirmUpdate}
+            onRejectUpdate={handleRejectUpdate}
+          />
+        </div>
       </main>
     </div>
   );
