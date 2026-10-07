@@ -1,6 +1,6 @@
 # Code review
 
-Date: 2026-10-06. Scope: the entire repo at commit `2c28307` (backend, frontend, Docker, scripts, tests, docs).
+Date: 2026-10-06. Scope: the entire repo at commit `a4309d7` (backend, frontend, Docker, scripts, tests, docs). This is the second review. It replaces the first, which covered `2c28307`.
 
 Each finding says how it was confirmed:
 
@@ -12,143 +12,178 @@ Per AGENTS.md, prove the root cause with evidence before changing any code.
 
 ## Summary
 
-The codebase is small, readable and matches the MVP plan. The backend is authoritative, the AI flow never applies changes without the user's confirmation, and backend tests cover 87%. The most important issues are:
+All of the first review's High and Medium findings are fixed, each with a test or check that reproduced the failure first. Since this review was written, N1, M6 and N6 have also been fixed (see the status table). The current state:
 
-- a session secret that is hard-coded in the repo
-- a few frontend paths where a failed save looks like it succeeded
-- AI change confirmations that show raw IDs instead of card and column names
-- persisted chat history that is never shown after a page reload
-- a drag-and-drop heuristic that can move a card into the wrong column
+- 51 backend tests (87% coverage), 23 frontend unit tests and 8 isolated Docker E2E tests all pass.
+- Lint and `npm run typecheck` are clean.
+- The real `backend/data/pm.db` is untouched by every test suite.
 
-There are no critical defects for a local, single-user MVP.
+The main things left:
 
-## Findings
+- **N6 (Medium, now fixed):** app startup put the demo cards back on a board the user had emptied. This was found while investigating startup database writes.
+- **A small set of Low items and documentation updates.**
 
-### High
+There are no High findings.
 
-**H1. The session signing secret is hard-coded.** `backend/app/main.py:101` (verified)
-`secret_key="pm-mvp-dev-session-secret"` is committed to the repo, so anyone can forge a valid `pm_session` cookie. This is acceptable for the local demo, but it blocks the multi-user future the schema is designed for.
-Action: read `SESSION_SECRET` from the environment. If it is missing, fall back to a random value generated per process, so sessions reset on restart rather than being forgeable.
+## Status of the first review's findings
 
-**H2. AI confirmations show IDs, not content.** `frontend/src/components/AiChatSidebar.tsx:38-59` (from code)
-Pending updates are shown as "Delete card #12" or "Move card #7 to col-review". The user cannot tell what they are confirming without matching IDs by hand. This weakens the confirm-before-apply safeguard. It matters most because card titles and details, which the user writes, are sent to the model, so text in a card could steer the model's proposals.
-Action: pass the current board to the sidebar, and show card titles and column titles in `describeUpdate`.
+| ID | Finding | Status |
+|---|---|---|
+| H1 | Hard-coded session secret | Fixed. `SESSION_SECRET` is read from the environment, with a per-process random fallback. Tests are in `test_session_secret.py`. |
+| H2 | AI confirmations showed IDs | Fixed. Titles are shown instead. |
+| M1 | Failed saves looked successful | Fixed for the card editor and the new card form. A failed column rename keeps the typed draft. |
+| M2 | Chat history not restored | Fixed by `GET /api/ai/chat`, which is loaded with the board. |
+| M3 | Drag moved a card into the adjacent column | Fixed. There were two causes: the pointer was computed from the overlay's rect, and the sideways-drift fallback overrode it. A Playwright test covers it. |
+| M4 | Blank prompt returned 502 | Fixed. It now returns 422 before any OpenRouter call. |
+| M5 | Raw JSON parse errors shown to users | Fixed by the `readErrorMessage` helper. |
+| M6 | `tsc --noEmit` fails on test files | Fixed after this review. The reference is now `vitest/globals`, and a new `npm run typecheck` exits 0 (it reported 115 errors before the fix). |
+| L1 to L12, D1 to D6 | Low items and docs | **Open** unless noted below. |
+
+## Status of this review's findings
+
+| ID | Finding | Status |
+|---|---|---|
+| N1 | Chat-history failure logs the user out | Fixed after this review. `AuthGate` shows the board with "Chat history could not be loaded." For both a 500 response and a network failure, a test reproduced the sign-out before the fix. A board-load failure still signs the user out, which is unchanged and still to be decided. |
+| N2 to N5 | Low items | Open. |
+| N6 | Startup restored demo cards on an emptied board | Fixed. Demo cards are seeded only when setup creates the board. A backend test reproduced the 8 restored cards before the fix. |
+| N7 | Every startup rewrites the database file | Open. Found by the investigation below. |
+
+## New findings
 
 ### Medium
 
-**M1. Failed saves look successful in the UI.** (from code)
-`withPersistence` returns `false` on failure (`KanbanBoard.tsx:256-278`), but `handleAddCard`, `handleUpdateCard` and `handleRenameColumn` throw that result away. The result:
-
-- `KanbanCard.saveCard` (`KanbanCard.tsx:41-53`) closes the editor and drops the edits.
-- `NewCardForm.handleSubmit` (`NewCardForm.tsx:13-20`) clears and closes the form.
-- `KanbanColumn` keeps showing the unsaved title draft as if it were the column's title.
-
-The error banner does appear, but the user's input is lost or misrepresented.
-Action: return the boolean from these handlers. Only close or reset the UI on `true`, and reset the column draft to `column.title` on `false`.
-
-**M2. Persisted chat history is never loaded.** `backend/app/main.py:233`, `frontend/src/components/KanbanBoard.tsx:230` (from code)
-The backend stores the last 20 messages, but there is no `GET` chat endpoint and `chatHistory` starts empty. After a refresh, the sidebar is empty until the next prompt, when the history suddenly reappears.
-Action: add `GET /api/ai/chat` that returns `get_recent_chat_messages_for_user`, and load it when the board mounts. Add a backend test and extend the e2e refresh test to cover it.
-
-**M3. Drag-and-drop can move a card into the adjacent column.** `frontend/src/components/KanbanBoard.tsx:127-156, 476-485` (likely)
-When the pointer resolves to the source column, `resolveColumnKeyFromHorizontalDelta` still overrides the target if the horizontal drift is at least half of `shiftStep`. `shiftStep` is `max(0.6 * columnWidth, 120)`. With a column about 200 px wide, a reorder within a column that drifts about 60 to 100 px sideways is sent to the neighboring column, even though the pointer never left the source column.
-Action: reproduce it with a Playwright mouse-coordinate test first. Then only apply the delta fallback when `pointerColumnKey` is null.
-
-**M4. An empty AI prompt returns 502 Bad Gateway.** `backend/app/ai.py:53-55`, `backend/app/main.py:249` (from code)
-A blank prompt raises `AIRequestError`, which maps to 502 and blames OpenRouter for a client input error. The `AIChatPayload` model accepts empty strings.
-Action: validate the prompt in the route (or add `min_length=1` with stripping) and return 422. Add a test.
-
-**M5. Errors that are not JSON produce raw parse errors in the UI.** `KanbanBoard.tsx:261-263, 350-352`, `AuthGate.tsx:31-33, 89-91` (verified)
-On a non-OK response, the code calls `response.json()` unconditionally. A 500 response or an HTML page (such as a proxy error) shows the user a message like `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`. This exact message was seen in the earlier failed e2e run.
-Action: guard the parse with a try/catch, and fall back to `defaultError` when the body isn't JSON.
-
-**M6. Type checking fails on the test files.** `frontend/src/test/vitest.d.ts` (verified)
-`npx tsc --noEmit` reports about 60 errors (`Cannot find name 'describe'`, and so on), because the reference is `types="vitest"` rather than `types="vitest/globals"`, and `globals: true` is set. `next build` does not catch this. The editor and any future type-check step will.
-Action: change the reference to `vitest/globals`, then add `"typecheck": "tsc --noEmit"` to `package.json` and run it in CI or before commits.
+**N1 (fixed). A chat-history failure logs the user out and hides the board.** `frontend/src/components/AuthGate.tsx:24-56` (from code)
+`loadBoard` now fetches `/api/ai/chat` after `/api/board`, inside the same `try`. If only the chat request fails (for example, a transient 500 or a proxy error), the `catch` clears the board and sets `isAuthenticated` to `false`. The user ends up on the sign-in form even though their session is valid. The same `catch` already did this for board-load failures before the M2 change, so the underlying pattern predates it.
+Action: add a unit test where `/api/ai/chat` returns 500 and assert that the board still renders with an error message. Then let a chat-history failure fall back to an empty history plus a visible error, without signing the user out. Separately, decide whether a board-load failure should sign the user out at all, since the session itself is still valid.
 
 ### Low
 
-**L1. Dead and duplicated move-position logic.** `frontend/src/lib/kanban.ts:103-149`, `KanbanBoard.tsx:158-223` (verified)
-`deriveMoveTargetPosition` is only used by its unit tests. The board uses its own `deriveTargetPositionFromPointer`, so the unit tests cover code that never runs. `KanbanBoard.tsx:186` also contains `movingDownward ? overIndex : overIndex`, a no-op ternary.
-Action: pick one implementation, put it in `lib/kanban.ts` with unit tests, and delete the other.
+**N2. Drop position can be wrong if the page scrolls during a drag.** `frontend/src/components/KanbanBoard.tsx:92-97` (likely)
+`getPointerPosition` adds `event.delta` to the activator's viewport coordinates. On drag end, dnd-kit passes `scrollAdjustedTranslate` as the delta (`@dnd-kit/core` `core.esm.js:3139`). That value includes scroll since the drag started, so if the window auto-scrolls mid-drag, the computed pointer is off by that amount. Columns sit side by side, so column choice is mostly unaffected, but the position within the column (`targetPosition`) can be wrong. The rect-based code before M3 had the same behavior.
+Action: reproduce it with a Playwright drag that triggers auto-scroll (tall column, drag to the bottom edge). If confirmed, compute the pointer from the start coordinates plus the raw mouse movement, or subtract the window scroll change.
 
-**L2. A cleared prompt is lost when the AI call fails.** `AiChatSidebar.tsx:79-80` (from code)
-`handleSubmitPrompt` catches errors itself, so the sidebar always clears the textarea, even after a failure.
-Action: have `onSubmitPrompt` return success, and only clear on success.
+**N3. Proposals for deleted cards can still be confirmed.** `frontend/src/components/AiChatSidebar.tsx:44-47, 172-185` (from code)
+After H2, a proposal whose card has since been removed shows "(no longer on the board)", but Confirm stays enabled. Confirming returns 404, shows the board error and leaves the proposal pending.
+Action: disable Confirm (Reject stays available) when the referenced card is missing.
 
-**L3. SQLite connections are not closed explicitly.** `backend/app/db.py` (every `with sqlite3.connect(...)`) (from code)
-`sqlite3.Connection`'s context manager commits or rolls back but does not close. CPython closes the connection when it is garbage collected, so this is benign today. It is fragile under other runtimes or when connections live longer.
-Action: wrap the connections in `contextlib.closing(...)` or a small `_connect()` helper that does both.
+**N4. Drag regression test covers rightward drift only.** `frontend/tests/kanban.spec.ts:213-257` (verified)
+The new M3 test drifts right, toward Done. The same logic applies to leftward drift, but that path isn't tested.
+Action: optionally add a mirrored test that drifts toward the left edge of a middle column.
 
-**L4. Constraint violations surface as 500.** `backend/app/db.py:288-295, 609-631` (likely)
-Card positions are read and then written in a deferred transaction. Two concurrent creates or moves in the same column could hit the unique `(column_id, position)` index and raise an `IntegrityError` that isn't handled. This is unlikely with a single user.
-Action: use `BEGIN IMMEDIATE` for the mutation functions, or map `sqlite3.IntegrityError` to 409.
+**N5. The new session behavior isn't documented.** (verified)
+Without `SESSION_SECRET`, every restart (including `scripts\start.cmd`) signs the user out. Neither `CLAUDE.md` nor `README.md` mentions `SESSION_SECRET`, and there is no `.env.example`.
+Action: document `SESSION_SECRET` next to `OPENROUTER_API_KEY` in `CLAUDE.md` and `README.md`. Optionally add a `.env.example` with empty values. Never commit real values.
+
+## Startup database writes (investigation)
+
+Starting the normal `pm-mvp-app` container changed the real `pm.db` checksum (`c7551c0d...` to `321cd327...`) before a verification run.
+
+**Evidence that startup made the change:**
+- The container started at 21:32:05 (local time) with `backend/data` mounted, and `pm.db` was modified at 21:32:06.
+- The container logs show no HTTP requests.
+- The file header records SQLite 3046001, the SQLite version in the `pm-app` image (local Python uses 3.50.4).
+
+The `c7551c0d...` file itself was not kept, so the before-and-after comparison was reproduced by replaying startup on scratch copies of the current file, inside the same image.
+
+**What startup runs:** importing `app.main` runs `create_app()`, which calls `initialize_database()`. That executes:
+- `CREATE TABLE/INDEX/TRIGGER IF NOT EXISTS` (no-ops on an existing database)
+- `INSERT OR IGNORE` for the default user, the board and the 5 columns
+- `SELECT COUNT(*)` of the board's cards
+- `COMMIT`
+
+`total_changes` is 0: no user, board, column, card or chat row is inserted, updated or deleted.
+
+**What still changes on disk:** exactly 5 bytes:
+- The header change counter and its "version valid for" copy (offsets 27 and 95).
+- Three `sqlite_sequence` counters: `users` 43 to 44, `boards` 43 to 44, `columns_meta` 215 to 220.
+
+On `AUTOINCREMENT` tables, SQLite allocates the next ID before resolving the uniqueness conflict, so every ignored seed insert still advances the counter.
+
+### Medium
+
+**N6 (fixed). Startup restores the demo cards on a board the user has emptied.** `backend/app/db.py:446-469` (verified on a copy)
+`_seed_default_user_and_board` inserts `DEFAULT_CARDS` whenever the board has zero cards. On a scratch copy, deleting every card and then running startup brought back the 8 demo cards ("Align roadmap themes", and so on). A user who clears their board gets demo data back after the next restart (`scripts\start.cmd`, or a container recreate). This is user-visible data change on startup, and it is not documented in `docs/DATABASE.md`, which lists seeding only the user, board and columns.
+Action: seed the demo cards only when the board itself is created. For example, insert them only if the `INSERT OR IGNORE INTO boards` actually inserted a row (`cursor.rowcount == 1`). Add a backend test that empties the board, re-runs `initialize_database`, and asserts the board stays empty.
+
+### Low
+
+**N7. Every startup or import rewrites the database file.** `backend/app/db.py:410-444` (verified)
+The ignored seed inserts advance the `sqlite_sequence` counters and the header change counter on every start. This is harmless to data: the counters only affect the IDs of future users, boards or columns, and the MVP never creates any. But the file checksum changes every time the app starts, so checksum-based "real database unchanged" checks are only meaningful if they are taken after the app has started.
+Action: optionally check for the user, board and columns before inserting (or use plain `INTEGER PRIMARY KEY` without `AUTOINCREMENT` for these seed-only tables), so an already-initialized database is not written at all. At minimum, note this behavior in `docs/DATABASE.md`.
+
+## Still open from the first review
+
+**L1. Dead and duplicated move-position logic.** (verified)
+`deriveMoveTargetPosition` in `lib/kanban.ts` is only used by its tests, while the board uses `deriveTargetPositionFromPointer`. `KanbanBoard.tsx` also still has the no-op `movingDownward ? overIndex : overIndex`.
+Action: keep one tested helper and delete the other.
+
+**L2. The prompt is cleared even when the AI request fails.** `AiChatSidebar.tsx:89-90` (from code)
+Action: have `onSubmitPrompt` return success, and clear the textarea only on success. This mirrors the M1 fix.
+
+**L3. SQLite connections are not closed explicitly.** `backend/app/db.py` (from code)
+Action: wrap the connections with `contextlib.closing`.
+
+**L4. Concurrent position writes can raise an unhandled `IntegrityError` (500).** `backend/app/db.py` (likely)
+Action: use `BEGIN IMMEDIATE`, or map the error to 409.
 
 **L5. AI validation accepts booleans as integers.** `backend/app/ai.py:298, 324` (from code)
-`isinstance(True, int)` is `True`, so `cardId: true` passes validation when card 1 exists, and `targetPosition: true` passes as 1.
-Action: also reject `bool` (`type(value) is int`).
+Action: also reject `bool`.
 
-**L6. Request fields have no size limits.** `backend/app/main.py:50-76` (from code)
-Titles, details and prompts are unbounded. A large prompt is sent to OpenRouter as is, along with the full board.
-Action: add `max_length` to the Pydantic fields (for example, title 200, details 2000, prompt 4000).
+**L6. Titles, details and prompts have no length limits.** `backend/app/main.py` payload models (from code)
+Action: add `max_length` to the Pydantic fields.
 
-**L7. The OpenRouter timeout may be short.** `backend/app/ai.py:123` (likely)
-20 s is tight for a 120B model with a full board and 20 messages of history. A timeout surfaces as a 502.
-Action: make it 60 s, or configurable via the environment, if timeouts show up in use.
+**L7. The 20 s OpenRouter timeout may be tight.** `backend/app/ai.py:123` (likely)
+Action: raise it if timeouts are seen in use.
 
-**L8. Importing the app writes to the database.** `backend/app/main.py:273` (verified)
-The module-level `app = create_app()` initializes the database at import time. This is why `backend/tests/conftest.py` had to redirect `PM_DB_PATH`.
-Action: acceptable as is. If it causes more surprises, move initialization into a FastAPI lifespan handler.
+**L8. Importing `app.main` initializes the database at the default path.** (verified, mitigated)
+`backend/tests/conftest.py` redirects the path for tests.
+Action: acceptable. Optionally move initialization into a lifespan handler.
 
-**L9. Drag-and-drop has no keyboard support.** `KanbanBoard.tsx:237-244` (from code)
-Only the mouse and touch sensors are registered, so cards cannot be moved with the keyboard.
-Action: add dnd-kit's `KeyboardSensor` with `sortableKeyboardCoordinates`.
+**L9. Drag-and-drop has no keyboard support.** (from code)
+Action: add `KeyboardSensor`.
 
-**L10. Overlapping mutations can apply stale boards.** `KanbanBoard.tsx:256-278` (likely)
-Each response replaces the board. If two requests overlap (for example, confirming an AI update during a drag save), the slower response wins and can briefly show an outdated board.
-Action: ignore responses from requests older than the latest one, or disable mutations while `isSaving`.
+**L10. Overlapping mutations can apply a stale board.** (likely)
+Action: ignore out-of-order responses, or block mutations while one is saving.
 
-**L11. Docker image hygiene.** `Dockerfile` (from code)
-The container runs as root, and `pip install uv` is unpinned.
-Action: pin `uv` (or copy it from the `ghcr.io/astral-sh/uv` image) and add a non-root `USER`.
+**L11. Docker image hygiene.** (from code)
+The container runs as root and `uv` is unpinned.
+Action: add a non-root `USER` and pin `uv`.
 
-**L12. Stray root Node package.** `package.json`, `package-lock.json` and `node_modules/` at the repo root (verified)
-These hold only `@playwright/test@^1.63`, while `frontend/` uses `^1.58`. Nothing references the root package.
+**L12. Stray root `package.json`, `package-lock.json` and `node_modules`.** (verified)
 Action: delete them unless they are used intentionally.
 
-### Documentation
+## Documentation
 
-**D1.** `README.md` describes only Parts 2 to 4. It should cover running the app, the AI key and `test:e2e` (Docker).
+**D1.** `README.md` describes only Parts 2 to 4. It should also cover `SESSION_SECRET`, `OPENROUTER_API_KEY` and `test:e2e` (which needs Docker).
 
-**D2.** `frontend/AGENTS.md` says "State is in-memory only (resets on refresh)" and lists stale structure and tests. It never mentions `AiChatSidebar`.
+**D2.** `frontend/AGENTS.md` is stale: it says state is in-memory only and never mentions `AiChatSidebar` or `lib/api.ts`.
 
-**D3.** `backend/AGENTS.md` still opens with "FastAPI backend scaffold for Part 2".
+**D3.** `backend/AGENTS.md` says "scaffold for Part 2" and doesn't list `GET /api/ai/chat`.
 
-**D4.** `HELLO_HTML` (`backend/app/main.py:36`) says it "will be replaced by the frontend build in Part 3".
+**D4.** `HELLO_HTML` in `backend/app/main.py` still mentions "Part 3".
 
-**D5.** The `docs/DATABASE.md` heading still reads "Part 5 proposal".
+**D5.** `docs/DATABASE.md` is still headed "Part 5 proposal".
 
-**D6.** The `docs/PLAN.md` final acceptance checklist is unchecked, even though the Docker e2e flow now passes.
+**D6.** The `docs/PLAN.md` final acceptance checklist is still unchecked.
 
-Action: update these in one docs pass. Keep the README minimal, per AGENTS.md.
+**D7 (new).** `CLAUDE.md` doesn't mention `GET /api/ai/chat` or `SESSION_SECRET` (see N5).
+
+Action: one docs pass covering D1 to D7, keeping the README minimal per AGENTS.md.
 
 ## What is in good shape
 
-- **Clear layering:** routes in `main.py`, persistence in `db.py`, the AI client in `ai.py`. All queries are parameterized and scoped by user.
-- **Validated AI output:** responses are checked against the live board (column keys and card IDs), and invalid output never causes a mutation.
-- **Sound position-shifting:** `POSITION_SHIFT_MARKER` correctly avoids unique-index collisions, and the tests cover it.
-- **Isolated tests:** the test setups never touch the real database. E2E runs against the real Docker image with a throwaway database.
+- **Test-first fixes:** every fix from the first review has a test that failed before the change. The M3 cause was confirmed with temporary logging before the fix.
+- **Isolated testing:** E2E runs against the real Docker image with a throwaway database, and backend tests never touch the default database. The real database's checksum was unchanged across every run.
+- **Safe AI flow:** proposals are validated against the live board, shown by title, and applied only on confirmation, through the normal endpoints.
+- **Simple backend:** parameterized SQL scoped by user, with predictable 401, 404, 422 and 502 error mapping.
 
 ## Action plan (suggested order)
 
-1. H1: move the session secret to the environment.
-2. M1 and L2: keep the user's input when a save fails.
-3. H2: show titles in AI confirmations.
-4. M4 and M5: fix the empty-prompt status and harden error parsing.
-5. M6: fix the Vitest types and add a `typecheck` script.
-6. M2: add the chat history endpoint and load it on mount.
-7. M3: reproduce the drag bug, then fix it. Fold in L1 (one position helper, tested).
-8. D1 to D6: docs pass, then tick the PLAN final acceptance.
-9. Low items as time allows: L3, L5 and L6 are small and cheap. L4, L7, L9, L10 and L11 are optional for the MVP.
+1. N1, M6 and N6: done.
+2. N5, N7 (doc note) and D1 to D7: docs pass, including `SESSION_SECRET`. Then tick the PLAN final acceptance.
+3. L2 and N3: small sidebar fixes to keep the prompt on failure and disable Confirm for missing cards.
+4. L1: consolidate the move-position helper.
+5. N2: reproduce the scroll-during-drag offset, then fix it if confirmed.
+6. Remaining Low items as time allows. L3, L5 and L6 are cheap. N7 (avoid the writes), L4, L7, L9, L10 and L11 are optional for the MVP.
 
-After each step, run the backend tests, lint, the unit tests and `npm run test:e2e`, and confirm that the `backend/data/pm.db` checksum is unchanged.
+After each step, run the backend tests, lint, `npm run typecheck`, the unit tests and `npm run test:e2e`, and confirm that the `backend/data/pm.db` checksum is unchanged. Because of N7, take the "before" checksum after the app has started, or stop the app container during verification.

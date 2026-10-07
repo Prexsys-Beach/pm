@@ -12,6 +12,24 @@ type SessionResponse = {
 };
 
 const defaultError = "Unable to complete that action right now. Please try again.";
+const chatHistoryError = "Chat history could not be loaded.";
+
+// Chat history is secondary to the board: if it fails to load, return null so
+// the caller can show the board with an error instead of signing the user out.
+const fetchChatHistory = async (): Promise<ChatMessage[] | null> => {
+  try {
+    const response = await fetch("/api/ai/chat", {
+      method: "GET",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return ((await response.json()) as { chatHistory: ChatMessage[] }).chatHistory;
+  } catch {
+    return null;
+  }
+};
 
 export const AuthGate = () => {
   const [isLoadingSession, setIsLoadingSession] = useState(true);
@@ -35,15 +53,11 @@ export const AuthGate = () => {
         throw new Error(await readErrorMessage(response, defaultError));
       }
       const payload = await response.json();
-      const chatResponse = await fetch("/api/ai/chat", {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!chatResponse.ok) {
-        throw new Error(await readErrorMessage(chatResponse, defaultError));
+      const history = await fetchChatHistory();
+      setChatHistory(history ?? []);
+      if (history === null) {
+        setError(chatHistoryError);
       }
-      const chatPayload = (await chatResponse.json()) as { chatHistory: ChatMessage[] };
-      setChatHistory(chatPayload.chatHistory);
       setBoard(toBoardData(payload));
     } catch (caughtError) {
       setError(

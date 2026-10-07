@@ -177,4 +177,30 @@ describe("AuthGate", () => {
     expect(alert).toHaveTextContent("Unable to complete that action right now. Please try again.");
     expect(alert).not.toHaveTextContent(/JSON|Unexpected token/);
   });
+
+  it.each([
+    ["an error response", () => Promise.resolve(new Response("Internal Server Error", { status: 500 }))],
+    ["a network failure", () => Promise.reject(new TypeError("Failed to fetch"))],
+  ])("keeps the user signed in with the board visible when chat history fails with %s", async (_label, chatFailure) => {
+    vi.spyOn(global, "fetch").mockImplementation((input) => {
+      if (typeof input === "string" && input === "/api/auth/session") {
+        return buildJsonResponse({ ok: true, body: { authenticated: true, username: "user" } });
+      }
+      if (typeof input === "string" && input === "/api/board") {
+        return buildJsonResponse({ ok: true, body: boardPayload });
+      }
+      if (typeof input === "string" && input === "/api/ai/chat") {
+        return chatFailure();
+      }
+      throw new Error("Unexpected request.");
+    });
+
+    render(<AuthGate />);
+
+    expect(await screen.findByRole("heading", { name: /kanban studio/i })).toBeInTheDocument();
+    expect(screen.getByText(/signed in as/i)).toBeInTheDocument();
+    expect(screen.getByText("Card one")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Chat history could not be loaded.");
+    expect(screen.queryByRole("heading", { name: /sign in to continue/i })).not.toBeInTheDocument();
+  });
 });

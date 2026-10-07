@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.db import (
+    DEFAULT_CARDS,
     DEFAULT_COLUMNS,
     add_chat_message_for_user,
     create_card_for_user,
@@ -51,6 +52,26 @@ def test_initialize_database_is_idempotent_and_preserves_seed_data(tmp_path: Pat
         assert users_count == 1
         assert boards_count == 1
         assert columns_count == len(DEFAULT_COLUMNS)
+
+
+def test_new_database_is_seeded_with_demo_cards(tmp_path: Path) -> None:
+    db_path = tmp_path / "pm-fresh.db"
+    initialize_database(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == len(DEFAULT_CARDS)
+
+
+def test_restart_does_not_restore_demo_cards_on_an_emptied_board(tmp_path: Path) -> None:
+    db_path = tmp_path / "pm-emptied.db"
+    initialize_database(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DELETE FROM cards")
+
+    initialize_database(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0
 
 
 def test_chat_message_trigger_caps_messages_at_twenty(tmp_path: Path) -> None:

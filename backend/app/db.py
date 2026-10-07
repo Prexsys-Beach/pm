@@ -421,13 +421,13 @@ def _seed_default_user_and_board(connection: sqlite3.Connection) -> None:
         ("user",),
     ).fetchone()[0]
 
-    connection.execute(
+    board_created = connection.execute(
         """
         INSERT OR IGNORE INTO boards (user_id, title)
         VALUES (?, ?)
         """,
         (user_id, "Kanban Board"),
-    )
+    ).rowcount == 1
 
     board_id = connection.execute(
         "SELECT id FROM boards WHERE user_id = ?",
@@ -443,11 +443,9 @@ def _seed_default_user_and_board(connection: sqlite3.Connection) -> None:
             (board_id, column_key, title, position),
         )
 
-    cards_count = connection.execute(
-        "SELECT COUNT(*) FROM cards WHERE board_id = ?",
-        (board_id,),
-    ).fetchone()[0]
-    if cards_count == 0:
+    # Demo cards are only for a newly created board; an existing board the
+    # user has emptied must stay empty across restarts.
+    if board_created:
         column_ids = {
             row[1]: row[0]
             for row in connection.execute(
