@@ -48,5 +48,5 @@ The Playwright e2e specs call `/api/*`, so `test:e2e:docker` (with the container
 ## Gotchas
 
 - SQLite DB defaults to `backend/data/pm.db` (override with `PM_DB_PATH`); `docker-compose.yml` mounts `./backend/data` so data survives restarts.
-- AI routes read `OPENROUTER_API_KEY` from the process environment. `docker-compose.yml` loads it from the root `.env` (required to exist); when running uvicorn outside Docker, export it yourself or `/api/ai/*` returns 503.
+- AI routes read `OPENROUTER_API_KEY` from the process environment. `docker-compose.yml` loads it from the root `.env` if present; without it (or when running uvicorn outside Docker without exporting it) the app starts but `/api/ai/*` returns 503.
 - Drag-and-drop e2e tests use explicit mouse-coordinate moves rather than `locator.dragTo(...)`, which is unreliable with dnd-kit.
