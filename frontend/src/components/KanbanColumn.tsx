@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import clsx from "clsx";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -24,11 +24,14 @@ export const KanbanColumn = ({
   onUpdateCard,
 }: KanbanColumnProps) => {
   const [titleDraft, setTitleDraft] = useState(column.title);
+  const [syncedTitle, setSyncedTitle] = useState(column.title);
   const { setNodeRef, isOver } = useDroppable({ id: column.key });
 
-  useEffect(() => {
+  // Reset the draft when the saved title changes (React's "adjust state on prop change" pattern).
+  if (syncedTitle !== column.title) {
+    setSyncedTitle(column.title);
     setTitleDraft(column.title);
-  }, [column.title]);
+  }
 
   const commitRename = async () => {
     if (titleDraft.trim() && titleDraft !== column.title) {

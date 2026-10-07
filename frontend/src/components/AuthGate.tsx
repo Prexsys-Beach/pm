@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { KanbanBoard } from "@/components/KanbanBoard";
 import { toBoardData, type BoardData } from "@/lib/kanban";
 
@@ -21,7 +21,7 @@ export const AuthGate = () => {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadBoard = async () => {
+  const loadBoard = useCallback(async () => {
     setIsLoadingBoard(true);
     try {
       const response = await fetch("/api/board", {
@@ -45,36 +45,34 @@ export const AuthGate = () => {
     } finally {
       setIsLoadingBoard(false);
     }
-  };
-
-  const loadSession = async () => {
-    setIsLoadingSession(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/auth/session", {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        throw new Error("Unable to load session.");
-      }
-      const session = (await response.json()) as SessionResponse;
-      setIsAuthenticated(session.authenticated);
-      if (session.authenticated) {
-        await loadBoard();
-      }
-    } catch {
-      setError(defaultError);
-      setIsAuthenticated(false);
-      setBoard(null);
-    } finally {
-      setIsLoadingSession(false);
-    }
-  };
+  }, []);
 
   useEffect(() => {
+    const loadSession = async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          method: "GET",
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error("Unable to load session.");
+        }
+        const session = (await response.json()) as SessionResponse;
+        setIsAuthenticated(session.authenticated);
+        if (session.authenticated) {
+          await loadBoard();
+        }
+      } catch {
+        setError(defaultError);
+        setIsAuthenticated(false);
+        setBoard(null);
+      } finally {
+        setIsLoadingSession(false);
+      }
+    };
+
     void loadSession();
-  }, []);
+  }, [loadBoard]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

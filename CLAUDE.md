@@ -29,12 +29,11 @@ Frontend (from `frontend/`):
 npm run lint
 npm run test:unit                               # Vitest (src/**/*.test.ts[x])
 npx vitest run src/lib/kanban.test.ts -t "name"
-npm run test:e2e                                # Playwright against `next dev` on :3000
-npm run test:e2e:docker                         # Playwright against the running container on :8000
+npm run test:e2e                                # Playwright against an isolated container on :8001
 npm run build                                   # static export to frontend/out/
 ```
 
-The Playwright e2e specs call `/api/*`, so `test:e2e:docker` (with the container running) is the meaningful full-stack run.
+`test:e2e` needs Docker running. Its global setup (`frontend/tests/global-setup.ts`) builds and starts `docker-compose.e2e.yml` as compose project `pm-e2e`, with a throwaway DB, no data volume and no `.env`. Teardown removes the container, so `backend/data/pm.db` is never touched. The AI is mocked in the specs with `page.route`. There is no dev proxy: `next dev` on :3000 has no `/api`, and the frontend uses relative `fetch("/api/...")` calls. To see frontend changes against the real backend, rebuild the container (`scripts\start.cmd` rebuilds the image).
 
 ## Architecture
 

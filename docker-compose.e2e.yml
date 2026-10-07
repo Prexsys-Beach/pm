@@ -1,0 +1,17 @@
+# Isolated stack for Playwright e2e runs (frontend/playwright.config.ts).
+# Same image as docker-compose.yml, but no data volume and no .env, so the
+# real backend/data/pm.db is never touched and the DB is discarded on `down`.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PM_DB_PATH: /tmp/pm-e2e.db
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
