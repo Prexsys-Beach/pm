@@ -278,3 +278,61 @@ def test_ai_chat_history_is_trimmed_to_twenty_messages(
     assert count == 20
     assert oldest == ("user", "prompt-2")
     assert newest == ("assistant", "echo: prompt-11")
+
+
+def test_ai_chat_history_requires_authentication() -> None:
+    response = client.get("/api/ai/chat")
+    assert response.status_code == 401
+
+
+def test_ai_chat_history_is_returned_after_reload(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    db_path = tmp_path / "ai-chat-reload.db"
+    auth_client = TestClient(
+        create_app(static_site_dir=Path("missing-static-site"), db_path=str(db_path), enable_db_init=True)
+    )
+
+    def fake_board_chat(_api_key: str, *, board: dict, user_prompt: str, chat_history: list[dict]) -> dict:
+        return {"assistantMessage": f"echo: {user_prompt}", "proposedUpdates": []}
+
+    monkeypatch.setattr("app.main.run_openrouter_board_chat", fake_board_chat)
+    auth_client.post("/api/auth/login", json={"username": "user", "password": "password"})
+
+    assert auth_client.get("/api/ai/chat").json() == {"chatHistory": []}
+    assert auth_client.post("/api/ai/chat", json={"prompt": "hello"}).status_code == 200
+
+    response = auth_client.get("/api/ai/chat")
+    assert response.status_code == 200
+    assert response.json() == {
+        "chatHistory": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "echo: hello"},
+        ]
+    }
+
+
+def test_ai_chat_rejects_blank_prompt_without_calling_openrouter(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    db_path = tmp_path / "ai-chat-blank.db"
+    auth_client = TestClient(
+        create_app(static_site_dir=Path("missing-static-site"), db_path=str(db_path), enable_db_init=True)
+    )
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("OpenRouter must not be called for a blank prompt.")
+
+    monkeypatch.setattr("app.main.run_openrouter_board_chat", fail_if_called)
+    auth_client.post("/api/auth/login", json={"username": "user", "password": "password"})
+
+    for prompt in ["", "   \n\t "]:
+        response = auth_client.post("/api/ai/chat", json={"prompt": prompt})
+        assert response.status_code == 422
+        assert response.json() == {"detail": "Prompt cannot be empty."}
+
+    assert auth_client.get("/api/ai/chat").json() == {"chatHistory": []}

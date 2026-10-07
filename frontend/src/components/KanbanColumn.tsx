@@ -9,10 +9,10 @@ import { NewCardForm } from "@/components/NewCardForm";
 type KanbanColumnProps = {
   column: Column;
   cards: Card[];
-  onRename: (columnKey: string, title: string) => Promise<void>;
-  onAddCard: (columnKey: string, title: string, details: string) => Promise<void>;
+  onRename: (columnKey: string, title: string) => Promise<boolean>;
+  onAddCard: (columnKey: string, title: string, details: string) => Promise<boolean>;
   onDeleteCard: (cardId: string) => Promise<void>;
-  onUpdateCard: (cardId: string, title: string, details: string) => Promise<void>;
+  onUpdateCard: (cardId: string, title: string, details: string) => Promise<boolean>;
 };
 
 export const KanbanColumn = ({

@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 const initialFormState = { title: "", details: "" };
 
 type NewCardFormProps = {
-  onAdd: (title: string, details: string) => Promise<void>;
+  onAdd: (title: string, details: string) => Promise<boolean>;
 };
 
 export const NewCardForm = ({ onAdd }: NewCardFormProps) => {
@@ -15,9 +15,10 @@ export const NewCardForm = ({ onAdd }: NewCardFormProps) => {
     if (!formState.title.trim()) {
       return;
     }
-    await onAdd(formState.title.trim(), formState.details.trim());
-    setFormState(initialFormState);
-    setIsOpen(false);
+    if (await onAdd(formState.title.trim(), formState.details.trim())) {
+      setFormState(initialFormState);
+      setIsOpen(false);
+    }
   };
 
   return (

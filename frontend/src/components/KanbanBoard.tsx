@@ -17,12 +17,14 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { getEventCoordinates } from "@dnd-kit/utilities";
 import {
   AiChatSidebar,
   type ChatMessage,
   type PendingUpdate,
   type ProposedUpdate,
 } from "@/components/AiChatSidebar";
+import { readErrorMessage } from "@/lib/api";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import {
@@ -36,6 +38,7 @@ const defaultError = "Unable to save that change right now. Please try again.";
 
 type KanbanBoardProps = {
   initialBoard: BoardData;
+  initialChatHistory?: ChatMessage[];
 };
 
 type AIChatResponse = {
@@ -85,6 +88,13 @@ const createCollisionDetectionStrategy = (columnKeys: Set<string>): CollisionDet
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
+
+// Current pointer position in viewport coordinates. active.rect describes the
+// 260px DragOverlay rather than the card, so its center is not the pointer.
+const getPointerPosition = (event: DragMoveEvent | DragEndEvent) => {
+  const start = getEventCoordinates(event.activatorEvent);
+  return start ? { x: start.x + event.delta.x, y: start.y + event.delta.y } : null;
+};
 
 const resolveColumnKeyFromViewportPoint = (x: number, y: number): string | null => {
   if (typeof document === "undefined") {
@@ -222,12 +232,12 @@ const deriveTargetPositionFromPointer = (
   return insertIndex + 1;
 };
 
-export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
+export const KanbanBoard = ({ initialBoard, initialChatHistory = [] }: KanbanBoardProps) => {
   const [board, setBoard] = useState<BoardData>(initialBoard);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>(initialChatHistory);
   const [pendingUpdates, setPendingUpdates] = useState<PendingUpdate[]>([]);
   const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
   const [applyingUpdateId, setApplyingUpdateId] = useState<string | null>(null);
@@ -259,8 +269,7 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
     try {
       const response = await action();
       if (!response.ok) {
-        const payload = (await response.json()) as { detail?: string };
-        throw new Error(payload.detail ?? defaultError);
+        throw new Error(await readErrorMessage(response, defaultError));
       }
       const payload = (await response.json()) as unknown;
       applyBoardResponse(payload);
@@ -348,8 +357,7 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
         body: JSON.stringify({ prompt }),
       });
       if (!response.ok) {
-        const payload = (await response.json()) as { detail?: string };
-        throw new Error(payload.detail ?? defaultError);
+        throw new Error(await readErrorMessage(response, defaultError));
       }
       const payload = (await response.json()) as AIChatResponse;
       setChatHistory(payload.chatHistory);
@@ -403,13 +411,11 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
   };
 
   const handleDragMove = (event: DragMoveEvent) => {
-    const initialRect = event.active.rect.current.initial;
-    if (initialRect === null) {
+    const pointer = getPointerPosition(event);
+    if (pointer === null) {
       return;
     }
-    const centerX = initialRect.left + event.delta.x + initialRect.width / 2;
-    const centerY = initialRect.top + event.delta.y + initialRect.height / 2;
-    const columnKey = resolveColumnKeyFromViewportPoint(centerX, centerY);
+    const columnKey = resolveColumnKeyFromViewportPoint(pointer.x, pointer.y);
     if (columnKey) {
       lastKnownOverIdRef.current = columnKey;
     }
@@ -420,24 +426,11 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
     setActiveCardId(null);
 
     const activeDndId = active.id as string;
-    const initialRect = event.active.rect.current.initial;
-    const translatedRect = event.active.rect.current.translated;
-    const pointerCenterX =
-      initialRect !== null
-        ? initialRect.left + event.delta.x + initialRect.width / 2
-        : translatedRect !== null
-          ? translatedRect.left + translatedRect.width / 2
-          : null;
-    const pointerCenterY =
-      initialRect !== null
-        ? initialRect.top + event.delta.y + initialRect.height / 2
-        : translatedRect !== null
-          ? translatedRect.top + translatedRect.height / 2
-          : null;
-    const pointerColumnKey =
-      pointerCenterX !== null && pointerCenterY !== null
-        ? resolveColumnKeyFromViewportPoint(pointerCenterX, pointerCenterY)
-        : null;
+    const pointer = getPointerPosition(event);
+    const pointerCenterY = pointer?.y ?? null;
+    const pointerColumnKey = pointer
+      ? resolveColumnKeyFromViewportPoint(pointer.x, pointer.y)
+      : null;
     const rememberedOverId =
       lastKnownOverIdRef.current && lastKnownOverIdRef.current !== activeDndId
         ? lastKnownOverIdRef.current
@@ -473,7 +466,9 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
     if (!targetColumnKey) {
       return;
     }
-    if (targetColumnKey === sourceColumnKey) {
+    // Only infer a column from horizontal drag distance when the pointer is not
+    // over any column; a pointer inside the source column means a reorder.
+    if (!pointerColumnKey && targetColumnKey === sourceColumnKey) {
       const deltaDerivedColumnKey = resolveColumnKeyFromHorizontalDelta(
         board.columns,
         sourceColumnKey,
@@ -507,7 +502,7 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
   };
 
   const handleRenameColumn = async (columnKey: string, title: string) => {
-    await withPersistence(() =>
+    return withPersistence(() =>
       fetch(`/api/columns/${columnKey}`, {
         method: "PATCH",
         credentials: "include",
@@ -518,7 +513,7 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
   };
 
   const handleAddCard = async (columnKey: string, title: string, details: string) => {
-    await withPersistence(() =>
+    return withPersistence(() =>
       fetch("/api/cards", {
         method: "POST",
         credentials: "include",
@@ -544,9 +539,9 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
   const handleUpdateCard = async (cardDndId: string, title: string, details: string) => {
     const cardId = parseCardIdFromDndId(cardDndId);
     if (cardId === null) {
-      return;
+      return false;
     }
-    await withPersistence(() =>
+    return withPersistence(() =>
       fetch(`/api/cards/${cardId}`, {
         method: "PATCH",
         credentials: "include",
@@ -641,6 +636,7 @@ export const KanbanBoard = ({ initialBoard }: KanbanBoardProps) => {
             </DragOverlay>
           </DndContext>
           <AiChatSidebar
+            board={board}
             chatHistory={chatHistory}
             pendingUpdates={pendingUpdates}
             isSubmittingPrompt={isSubmittingPrompt}

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { toDndCardId, type BoardData } from "@/lib/kanban";
 
 export type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -25,6 +26,7 @@ export type PendingUpdate = {
 };
 
 type AiChatSidebarProps = {
+  board: BoardData;
   chatHistory: ChatMessage[];
   pendingUpdates: PendingUpdate[];
   isSubmittingPrompt: boolean;
@@ -35,12 +37,19 @@ type AiChatSidebarProps = {
   onRejectUpdate: (id: string) => void;
 };
 
-const describeUpdate = (update: ProposedUpdate): string => {
+const describeUpdate = (update: ProposedUpdate, board: BoardData): string => {
+  const columnTitle = (columnKey: string) =>
+    `"${board.columns.find((column) => column.key === columnKey)?.title ?? columnKey}"`;
+  const cardTitle = (cardId: number) => {
+    const card = board.cards[toDndCardId(cardId)];
+    return card ? `"${card.title}"` : "(no longer on the board)";
+  };
+
   if (update.action === "rename_column") {
-    return `Rename ${update.columnKey} to "${update.title}"`;
+    return `Rename column ${columnTitle(update.columnKey)} to "${update.title}"`;
   }
   if (update.action === "create_card") {
-    return `Create card "${update.title}" in ${update.columnKey}`;
+    return `Create card "${update.title}" in ${columnTitle(update.columnKey)}`;
   }
   if (update.action === "update_card") {
     const updates: string[] = [];
@@ -50,15 +59,16 @@ const describeUpdate = (update: ProposedUpdate): string => {
     if (typeof update.details === "string") {
       updates.push("details");
     }
-    return `Update card #${update.cardId} (${updates.join(" and ")})`;
+    return `Update card ${cardTitle(update.cardId)} (${updates.join(" and ")})`;
   }
   if (update.action === "delete_card") {
-    return `Delete card #${update.cardId}`;
+    return `Delete card ${cardTitle(update.cardId)}`;
   }
-  return `Move card #${update.cardId} to ${update.targetColumnKey}`;
+  return `Move card ${cardTitle(update.cardId)} to ${columnTitle(update.targetColumnKey)}`;
 };
 
 export const AiChatSidebar = ({
+  board,
   chatHistory,
   pendingUpdates,
   isSubmittingPrompt,
@@ -161,7 +171,7 @@ export const AiChatSidebar = ({
             pendingUpdates.map((pending) => (
               <article key={pending.id} className="rounded-xl border border-[var(--stroke)] bg-white p-3">
                 <p className="text-sm font-medium text-[var(--navy-dark)]">
-                  {describeUpdate(pending.instruction)}
+                  {describeUpdate(pending.instruction, board)}
                 </p>
                 <div className="mt-3 flex gap-2">
                   <button

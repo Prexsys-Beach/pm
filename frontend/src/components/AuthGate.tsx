@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import type { ChatMessage } from "@/components/AiChatSidebar";
 import { KanbanBoard } from "@/components/KanbanBoard";
+import { readErrorMessage } from "@/lib/api";
 import { toBoardData, type BoardData } from "@/lib/kanban";
 
 type SessionResponse = {
@@ -19,6 +21,7 @@ export const AuthGate = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingBoard, setIsLoadingBoard] = useState(false);
   const [board, setBoard] = useState<BoardData | null>(null);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const loadBoard = useCallback(async () => {
@@ -29,10 +32,18 @@ export const AuthGate = () => {
         credentials: "include",
       });
       if (!response.ok) {
-        const payload = (await response.json()) as { detail?: string };
-        throw new Error(payload.detail ?? defaultError);
+        throw new Error(await readErrorMessage(response, defaultError));
       }
       const payload = await response.json();
+      const chatResponse = await fetch("/api/ai/chat", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!chatResponse.ok) {
+        throw new Error(await readErrorMessage(chatResponse, defaultError));
+      }
+      const chatPayload = (await chatResponse.json()) as { chatHistory: ChatMessage[] };
+      setChatHistory(chatPayload.chatHistory);
       setBoard(toBoardData(payload));
     } catch (caughtError) {
       setError(
@@ -86,8 +97,7 @@ export const AuthGate = () => {
         body: JSON.stringify({ username, password }),
       });
       if (!response.ok) {
-        const payload = (await response.json()) as { detail?: string };
-        throw new Error(payload.detail ?? defaultError);
+        throw new Error(await readErrorMessage(response, defaultError));
       }
       setPassword("");
       setIsAuthenticated(true);
@@ -222,7 +232,7 @@ export const AuthGate = () => {
           {error}
         </p>
       ) : null}
-      <KanbanBoard initialBoard={board} />
+      <KanbanBoard initialBoard={board} initialChatHistory={chatHistory} />
     </div>
   );
 };

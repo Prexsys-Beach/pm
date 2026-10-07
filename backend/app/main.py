@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,9 @@ def create_app(
     middleware = [
         Middleware(
             SessionMiddleware,
-            secret_key="pm-mvp-dev-session-secret",
+            # Without SESSION_SECRET (local dev/tests), a per-process random key is used,
+            # so sessions do not survive a restart.
+            secret_key=os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32),
             same_site="lax",
             https_only=False,
             session_cookie="pm_session",
@@ -230,9 +233,19 @@ def create_app(
         except AIRequestError as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
+    @app.get("/api/ai/chat")
+    def read_ai_chat_history(request: Request) -> dict[str, Any]:
+        username = _require_authenticated_username(request)
+        return {"chatHistory": get_recent_chat_messages_for_user(username, db_path)}
+
     @app.post("/api/ai/chat")
     def ai_chat(payload: AIChatPayload, request: Request) -> dict[str, Any]:
         username = _require_authenticated_username(request)
+        if not payload.prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Prompt cannot be empty.",
+            )
         board = get_board_for_user(username, db_path)
         chat_history = get_recent_chat_messages_for_user(username, db_path)
         try:

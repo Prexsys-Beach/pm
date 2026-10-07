@@ -94,6 +94,10 @@ test("applies AI-proposed update only after confirmation", async ({ page }) => {
   const cardTitle = `AI confirm ${Date.now()}`;
 
   await page.route("**/api/ai/chat", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
     const response = {
       assistantMessage: "I prepared one card update.",
       proposedUpdates: [
@@ -120,7 +124,7 @@ test("applies AI-proposed update only after confirmation", async ({ page }) => {
   await page.getByRole("button", { name: "Send to AI" }).click();
 
   const reviewColumn = page.getByTestId("column-col-review");
-  await expect(page.getByText(`Create card "${cardTitle}" in col-review`)).toBeVisible();
+  await expect(page.getByText(`Create card "${cardTitle}" in "Review"`)).toBeVisible();
   await expect(reviewColumn.getByText(cardTitle)).toHaveCount(0);
 
   await page
@@ -138,6 +142,10 @@ test("handles repeated AI proposal cycles and keeps confirmed changes after refr
 
   let requestCount = 0;
   await page.route("**/api/ai/chat", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
     requestCount += 1;
     const response =
       requestCount === 1
@@ -194,10 +202,54 @@ test("handles repeated AI proposal cycles and keeps confirmed changes after refr
     .getByRole("button", { name: /^Reject$/ })
     .first()
     .click();
-  await expect(page.getByText(`Create card "${rejectedTitle}" in col-done`)).toHaveCount(0);
+  await expect(page.getByText(`Create card "${rejectedTitle}" in "Done"`)).toHaveCount(0);
   await expect(page.getByTestId("column-col-done").getByText(rejectedTitle)).toHaveCount(0);
 
   await page.reload();
   await expect(page.getByTestId("column-col-discovery").getByText(acceptedTitle)).toBeVisible();
   await expect(page.getByTestId("column-col-done").getByText(rejectedTitle)).toHaveCount(0);
+});
+
+test.describe("reordering within a column", () => {
+  test.use({ viewport: { width: 1280, height: 1600 } });
+
+  test("keeps a card in its column when the drag drifts sideways", async ({ page }) => {
+    await login(page);
+    const stamp = Date.now();
+    const firstTitle = `Drift first ${stamp}`;
+    const secondTitle = `Drift second ${stamp}`;
+    for (const title of [firstTitle, secondTitle]) {
+      const response = await page.request.post("/api/cards", {
+        data: { columnKey: "col-review", title, details: "Reorder target." },
+      });
+      expect(response.ok()).toBeTruthy();
+    }
+    await page.reload();
+
+    const column = page.getByTestId("column-col-review");
+    const firstCard = column.locator("article", { hasText: firstTitle });
+    const secondCard = column.locator("article", { hasText: secondTitle });
+    await secondCard.scrollIntoViewIfNeeded();
+    const columnBox = await column.boundingBox();
+    const firstBox = await firstCard.boundingBox();
+    const secondBox = await secondCard.boundingBox();
+    if (!columnBox || !firstBox || !secondBox) {
+      throw new Error("Unable to calculate drag coordinates.");
+    }
+
+    // Drop below the second card while drifting toward the column's right edge,
+    // never leaving the source column.
+    const moveResponse = page.waitForResponse((response) => response.url().endsWith("/move"));
+    await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(columnBox.x + columnBox.width - 8, secondBox.y + secondBox.height + 10, {
+      steps: 18,
+    });
+    await page.mouse.up();
+    await moveResponse;
+
+    await expect(page.getByTestId("column-col-done").getByText(firstTitle)).toHaveCount(0);
+    const titles = await column.locator("article h4").allTextContents();
+    expect(titles.indexOf(firstTitle)).toBeGreaterThan(titles.indexOf(secondTitle));
+  });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthGate } from "@/components/AuthGate";
 
@@ -73,6 +73,9 @@ describe("AuthGate", () => {
       if (typeof input === "string" && input === "/api/board") {
         return buildJsonResponse({ ok: true, body: boardPayload });
       }
+      if (typeof input === "string" && input === "/api/ai/chat") {
+        return buildJsonResponse({ ok: true, body: { chatHistory: [] } });
+      }
       throw new Error("Unexpected request.");
     });
 
@@ -100,6 +103,9 @@ describe("AuthGate", () => {
       if (typeof input === "string" && input === "/api/board") {
         return buildJsonResponse({ ok: true, body: boardPayload });
       }
+      if (typeof input === "string" && input === "/api/ai/chat") {
+        return buildJsonResponse({ ok: true, body: { chatHistory: [] } });
+      }
       if (typeof input === "string" && input === "/api/auth/logout") {
         authenticated = false;
         return buildJsonResponse({
@@ -118,5 +124,57 @@ describe("AuthGate", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /sign in to continue/i })).toBeInTheDocument();
     });
+  });
+
+  it("restores persisted chat history when the board loads", async () => {
+    vi.spyOn(global, "fetch").mockImplementation((input) => {
+      if (typeof input === "string" && input === "/api/auth/session") {
+        return buildJsonResponse({ ok: true, body: { authenticated: true, username: "user" } });
+      }
+      if (typeof input === "string" && input === "/api/board") {
+        return buildJsonResponse({ ok: true, body: boardPayload });
+      }
+      if (typeof input === "string" && input === "/api/ai/chat") {
+        return buildJsonResponse({
+          ok: true,
+          body: {
+            chatHistory: [
+              { role: "user", content: "Earlier question" },
+              { role: "assistant", content: "Earlier answer" },
+            ],
+          },
+        });
+      }
+      throw new Error("Unexpected request.");
+    });
+
+    render(<AuthGate />);
+
+    const thread = await screen.findByTestId("ai-chat-thread");
+    expect(within(thread).getByText("Earlier question")).toBeInTheDocument();
+    expect(within(thread).getByText("Earlier answer")).toBeInTheDocument();
+  });
+
+  it("shows a friendly error when login fails with a non-JSON response", async () => {
+    vi.spyOn(global, "fetch").mockImplementation((input) => {
+      if (typeof input === "string" && input === "/api/auth/session") {
+        return buildJsonResponse({ ok: true, body: { authenticated: false, username: null } });
+      }
+      if (typeof input === "string" && input === "/api/auth/login") {
+        return Promise.resolve(
+          new Response("<!DOCTYPE html><html><body>Bad Gateway</body></html>", { status: 502 })
+        );
+      }
+      throw new Error("Unexpected request.");
+    });
+
+    render(<AuthGate />);
+    await userEvent.type(await screen.findByLabelText(/username/i), "user");
+    await userEvent.type(screen.getByLabelText(/password/i), "password");
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Unable to complete that action right now. Please try again.");
+    expect(alert).not.toHaveTextContent(/JSON|Unexpected token/);
   });
 });

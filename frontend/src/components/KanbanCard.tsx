@@ -7,7 +7,7 @@ import type { Card } from "@/lib/kanban";
 type KanbanCardProps = {
   card: Card;
   onDelete: (cardId: string) => Promise<void>;
-  onUpdate: (cardId: string, title: string, details: string) => Promise<void>;
+  onUpdate: (cardId: string, title: string, details: string) => Promise<boolean>;
 };
 
 export const KanbanCard = ({ card, onDelete, onUpdate }: KanbanCardProps) => {
@@ -45,8 +45,9 @@ export const KanbanCard = ({ card, onDelete, onUpdate }: KanbanCardProps) => {
     }
     setIsSaving(true);
     try {
-      await onUpdate(card.dndId, nextTitle, detailsDraft.trim());
-      setIsEditing(false);
+      if (await onUpdate(card.dndId, nextTitle, detailsDraft.trim())) {
+        setIsEditing(false);
+      }
     } finally {
       setIsSaving(false);
     }
