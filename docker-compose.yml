@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: pm-mvp-app
+    env_file: .env
     ports:
       - "8000:8000"
     volumes:
